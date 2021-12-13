@@ -1,0 +1,181 @@
+---
+- name: go minikube
+  hosts: localhost
+  gather_facts: False
+  connection: local
+
+  tasks:    
+    - name: create a namespace
+      k8s:
+        state: present
+        definition: 
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: aramirez
+            labels: 
+              tipo: "desarrollo"
+
+    - name: create pv
+      k8s:
+        state: present
+        definition: 
+          apiVersion: v1 
+          kind: PersistentVolume
+          metadata:
+            name: pv-escuela
+            namespace: aramirez
+            labels:
+              tipo: "desarrollo"
+          spec:
+            storageClassName: escuela-db
+            capacity: 
+              storage: 2Gi
+            accessModes:
+              - ReadWriteOnce
+            hostPath:
+              path: "/mnt/data"
+
+    - name: create pvc        
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1 
+          kind: PersistentVolumeClaim
+          metadata:
+            name: pvc-escuela
+            namespace: aramirez
+            labels:
+              tipo: "desarrollo"
+          spec:
+            storageClassName: escuela-db
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 2Gi
+
+    - name: deploy db
+      k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: escuela-db
+            namespace: aramirez
+            labels:
+              tipo: "desarrollo"
+          spec:
+            selector:
+              matchLabels:
+                app: escuela-db
+            template: 
+              metadata:
+                labels:
+                  app: escuela-db
+              spec:
+                containers:  
+                - name: escuela-db
+                  image: michisauria/escuela-db:latest
+                  ports: 
+                  - containerPort: 3306
+                  volumeMounts:
+                  - mountPath: /var/lib/mysql
+                    name: escuela-db
+                volumes:
+                 - name: escuela-db
+                   persistentVolumeClaim:  
+                     claimName: pvc-escuela
+  
+    - name: deploy escuela.
+      k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: escuela
+            namespace: aramirez
+            labels: 
+              tipo: "desarrollo"
+          spec:
+            selector:
+              matchLabels:
+                app: escuela
+            replicas: 7
+            template:
+              metadata:
+                labels:  
+                  app: escuela
+              spec:  
+                containers:
+                - name: escuela
+                  image: michisauria/escuela:latest
+                  ports: 
+                  - containerPort: 80
+
+    - name: service db.
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: service-db
+            namespace: aramirez
+            labels:
+              app: escuela-db
+          spec:
+            ports:
+            - port: 3306
+              targetPort: 3306
+              protocol: TCP
+            selector:
+              app: escuela-db
+            
+    - name: service escuela.
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: service-np
+            namespace: aramirez
+            labels:
+              app: escuela
+          spec:
+            type: NodePort
+            ports:
+            - port: 80
+              targetPort: 80
+              nodePort: 30001
+              protocol: TCP
+            selector:
+              app: escuela    
+
+    - name: ingress.
+      k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress
+            namespace: aramirez
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            rules: 
+            - host: app.aramirez.com
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: service-np
+                      port:
+                        number: 80                    
+
